@@ -1,0 +1,113 @@
+#! /usr/bin/env boot
+
+(set-env! :dependencies '[[clj-http "2.3.0"]
+                          [org.clojure/core.async "0.3.442"]
+                          [clj-tagsoup/clj-tagsoup "0.3.0"]])
+
+(require '[clojure.string :as str])
+(require '[clj-http.client :as client])
+(require '[clojure.core.async
+           :as async
+           :refer [>! <! >!! <!! go chan close!]])
+(require '[pl.danieljanus.tagsoup :as soup])
+(require '[boot.cli :refer [defclifn]])
+
+(declare get-bangumi)
+
+(defn- split-content
+  "按照标点符号分割文件中的内容"
+  [file]
+  (-> file (slurp) (str/split #"[，|。|、|：|\n|\ |\r\n]")))
+
+(defn is-bangumi?
+  [string]
+  (re-matches #"^[A-Z|a-z].*[0-9]$" string))
+
+(defn- get-bangumi-from-col
+  "将集合中的番号取出"
+  [col]
+  (filter is-bangumi? col))
+
+(defn- init-bangumi-collection
+  "从集合中取得番号"
+  [file]
+  (->>
+   file
+   (split-content)
+   (get-bangumi-from-col)
+   (map #(clojure.string/replace % #"[-|\ ]" "")) ;; 将番号中的 ‘-’ 和空格去掉
+   (map #(clojure.string/lower-case %))))
+
+(defn- make-bangumi-urls
+  "创建查询连接"
+  [col]
+  (map #(str "http://cililian.me/list/" % "/1.html") col))
+
+(defn- get-magnet-url
+  "将网页中的磁力连接取出，并放入 out-file"
+  [html-file out-file]
+  (let [spit-file (fn [context] (spit out-file (str context "\n") :append true))]
+  (->>
+   html-file
+   (soup/parse-string) ; 解构网页
+   (flatten)
+   (map (fn [{:keys [href]}]
+          (if (not (nil? href))
+            href))) ; 取出网页中的所有 href 内容
+   (filter #(not (nil? %))) ; 将 nil 去掉
+   (filter #(re-find #"^magnet:" %)) ; 将不是 magnet 的内容去掉
+   (first) ; 取第一条 magnet
+   (spit-file) ;;写入文件
+   )))
+
+(defn- analysis-web-content
+  "分析网页内容"
+  [web-content out-file]
+  (str (get-magnet-url web-content out-file)))
+  ; (doseq [line (str/split web-content #"\n")]
+                                        ;  (println line)))
+
+(defn- download-bangumi
+  "异步下载包含番号的网页"
+  [in-file out-file]
+  (let [c (chan)
+        bangumi-urls (make-bangumi-urls (init-bangumi-collection in-file))
+        current (atom 0)
+        url-count (count (doall bangumi-urls))]
+    (go (while (> (count bangumi-urls) @current)
+          (analysis-web-content (:body (<! c)) out-file)
+          (println "receive response [" (+ 1 @current) "/" url-count "]")
+          (+ @current 1))
+        (close! c))
+    (map
+     #(go (Thread/sleep (rand 1000))
+          (>! c (client/get %)))
+     bangumi-urls)))
+
+;; (defclifn -main
+;;   []
+;;   (download-bangumi "in.txt" "urls.txt"))
+
+;; (defclifn -main
+;;   [i input-file VAL str "The file script will read context from it"
+;;    o output-file VAL str "The script will write result to this file"]
+;;   (println *opts*))
+
+(def usage
+  "Usage: ./script input-file output-file")
+
+(defn -main
+  []
+  (download-bangumi "in.txt" "out.txt"))
+  ;; (if (< (count args) 2)
+  ;;   (println usage)
+  ;;   (download-bangumi (get args 0) (get args 1))))
+
+;;; test are
+(comment
+  (spit "urls.txt"
+        (doall (make-bangumi-urls (init-bangumi-collection "1.txt"))))
+  (download-bangumi "in.txt" "urls.txt")
+  (print
+   (client/get "http://cililian.me/list/miad530/1.html"))
+  )
