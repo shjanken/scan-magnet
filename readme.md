@@ -26,3 +26,11 @@ Use script in repl
 ```clojure
 boot.user>  (dowenload-bangumi "input.file" "output.file")
 ```
+
+
+问题
+----------------
+
+1. 直接执行脚本，没有结果写入 `output file`. 脚本中的发送请求和接受请求在是在别的线程中执行的，所以主线程（-main)在没有结果返回时就执行结束了，接受到的请求无法写入`output-file`
+2. 在分析完成文本中的车牌以后，将结果显示出来
+3. 增加选项，只显示分析结果，不不进行获取 `magnet`.
